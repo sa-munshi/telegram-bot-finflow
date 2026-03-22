@@ -11,6 +11,22 @@ const {
   formatBudgetAlert
 } = require('./messages')
 
+// ─── Startup: warn about missing required environment variables ───────────────
+const required = [
+  'TELEGRAM_BOT_TOKEN',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY',
+  'SARVAM_API_KEY',
+  'GEMINI_API_KEY',
+  'APP_URL',
+  'WEBHOOK_SECRET'
+]
+for (const key of required) {
+  if (!process.env[key]) {
+    console.error(`[STARTUP] Missing env var: ${key}`)
+  }
+}
+
 const app = express()
 app.use(express.json())
 

@@ -159,9 +159,34 @@ async function checkBudgetAlerts(userId, category) {
   return null
 }
 
-// ─── Trigger broad budget alert check (placeholder for extended logic) ───────
+// ─── Trigger budget alert via Next.js app (email + in-app + push) ────────────
 async function triggerBudgetAlert(userId) {
-  // Intentionally minimal: per-category alerts are handled via checkBudgetAlerts
+  try {
+    const appUrl = process.env.APP_URL
+    if (!appUrl || !process.env.WEBHOOK_SECRET) {
+      console.warn('[BudgetAlert] Skipped: APP_URL or WEBHOOK_SECRET not set')
+      return
+    }
+    const res = await fetch(
+      `${appUrl}/api/notifications/budget-alert`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-bot-secret': process.env.WEBHOOK_SECRET
+        },
+        body: JSON.stringify({ user_id: userId })
+      }
+    )
+    if (!res.ok) {
+      console.error(`[BudgetAlert] HTTP ${res.status}: ${res.statusText}`)
+      return
+    }
+    const data = await res.json()
+    console.log('[BudgetAlert] Result:', data)
+  } catch (err) {
+    console.error('[BudgetAlert] Failed:', err.message)
+  }
 }
 
 // ─── Get all users with telegram connected (for app notifications) ───────────
