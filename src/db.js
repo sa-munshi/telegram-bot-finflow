@@ -159,6 +159,11 @@ async function checkBudgetAlerts(userId, category) {
   return null
 }
 
+// ─── Trigger broad budget alert check (placeholder for extended logic) ───────
+async function triggerBudgetAlert(userId) {
+  // Intentionally minimal: per-category alerts are handled via checkBudgetAlerts
+}
+
 // ─── Get all users with telegram connected (for app notifications) ───────────
 async function getAllTelegramUsers() {
   const { data } = await supabase
@@ -178,5 +183,6 @@ module.exports = {
   getRecentTransactions,
   getBudgetsWithSpending,
   checkBudgetAlerts,
+  triggerBudgetAlert,
   getAllTelegramUsers
 }
