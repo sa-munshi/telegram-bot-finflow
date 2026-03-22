@@ -10,7 +10,8 @@ const {
   getMonthlyBalance,
   getRecentTransactions,
   getBudgetsWithSpending,
-  checkBudgetAlerts
+  checkBudgetAlerts,
+  triggerBudgetAlert
 } = require('./db')
 const {
   formatTransactionPreview,
@@ -31,6 +32,7 @@ const {
   backToPreviewKeyboard
 } = require('./keyboards')
 const { STATE, getSession, setSession, clearSession } = require('./session')
+const supabase = require('./supabase')
 
 // ─── Init bot ─────────────────────────────────────────────────────────────────
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true })
@@ -68,7 +70,7 @@ async function requireUser(chatId, telegramId) {
   const user = await getUserByTelegramId(telegramId)
   if (!user) {
     await send(chatId,
-      '🔗 <b>Account not connected!</b>\n\nGo to FinFlow app → Settings → Connect Telegram\nThen enter your Chat ID: <b>' + chatId + '</b>'
+      `Account not linked.\n\nGo to FinFlow app → Settings → Connect Telegram\nEnter your Chat ID: <code>${chatId}</code>`
     )
     return null
   }
@@ -78,75 +80,51 @@ async function requireUser(chatId, telegramId) {
 // ─── /start ───────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id
-  const firstName = msg.from.first_name || 'there'
+  const user = await getUserByTelegramId(msg.from.id)
 
-  await send(chatId,
-    `👋 Hey <b>${firstName}</b>! Welcome to <b>FinFlow Bot</b>!\n\n` +
-    `To connect your account:\n` +
-    `1️⃣ Open the FinFlow app\n` +
-    `2️⃣ Go to Settings → Connect Telegram\n` +
-    `3️⃣ Enter your Chat ID: <b>${chatId}</b>\n\n` +
-    `Once connected, you can:\n` +
-    `💬 Send any text to add a transaction\n` +
-    `📷 Send a photo/receipt to scan it\n` +
-    `➕ Use /add for manual entry\n\n` +
-    `<b>Commands:</b>\n` +
-    `/balance — All time balance\n` +
-    `/monthly — This month summary\n` +
-    `/recent — Last 5 transactions\n` +
-    `/budgets — Budget status\n` +
-    `/add — Manual transaction entry\n` +
-    `/menu — Show quick menu\n` +
-    `/help — Show this message`
-  )
+  if (user) {
+    await send(chatId,
+      `Welcome back, <b>${user.name || msg.from.first_name || 'there'}</b>.\n\nYour account is connected. Use /help to see commands.`
+    )
+  } else {
+    await send(chatId,
+      `Account not linked.\n\nGo to FinFlow app → Settings → Connect Telegram\nEnter your Chat ID: <code>${chatId}</code>`
+    )
+  }
 })
 
 // ─── /help ────────────────────────────────────────────────────────────────────
 bot.onText(/\/help/, async (msg) => {
   const chatId = msg.chat.id
   await send(chatId,
-    `🆘 <b>FinFlow Bot Help</b>\n\n` +
-    `<b>Add Transactions:</b>\n` +
-    `• Just type naturally: "spent 500 on lunch"\n` +
-    `• Send a receipt photo 📷\n` +
-    `• Use /add for step-by-step entry\n\n` +
-    `<b>Commands:</b>\n` +
-    `/balance — All time balance\n` +
-    `/monthly — This month summary\n` +
-    `/recent — Last 5 transactions\n` +
-    `/budgets — This month's budgets\n` +
-    `/add — Manual entry (step by step)\n` +
-    `/menu — Quick action menu\n\n` +
-    `<b>Your Chat ID:</b> <code>${chatId}</code>`
+    `<b>FinFlow Bot</b>\n\n` +
+    `Add transactions:\n` +
+    `· Type naturally — "spent 500 on lunch"\n` +
+    `· Send a receipt photo\n` +
+    `· Use /add for step-by-step\n\n` +
+    `Commands:\n` +
+    `/recent     — Last 5 transactions\n` +
+    `/add        — Manual entry\n` +
+    `/limits     — Daily usage\n` +
+    `/disconnect — Unlink account\n` +
+    `/help       — This message`
   )
 })
 
-// ─── /menu ────────────────────────────────────────────────────────────────────
-bot.onText(/\/menu/, async (msg) => {
+// ─── /disconnect ──────────────────────────────────────────────────────────────
+bot.onText(/\/disconnect/, async (msg) => {
   const chatId = msg.chat.id
-  await send(chatId, '📱 <b>FinFlow Quick Menu</b>\n\nWhat would you like to do?', {
-    reply_markup: mainMenuKeyboard()
-  })
-})
+  const { error } = await supabase
+    .from('settings')
+    .update({ telegram_id: null, telegram_chat_id: null })
+    .eq('telegram_id', msg.from.id.toString())
 
-// ─── /balance ─────────────────────────────────────────────────────────────────
-bot.onText(/\/balance/, async (msg) => {
-  const chatId = msg.chat.id
-  const user = await requireUser(chatId, msg.from.id)
-  if (!user) return
+  if (error) {
+    await send(chatId, '[ERROR] Could not disconnect. Please try again.')
+    return
+  }
 
-  const summary = await getBalanceSummary(user.user_id)
-  await send(chatId, formatBalance(summary, false))
-})
-
-// ─── /monthly ─────────────────────────────────────────────────────────────────
-bot.onText(/\/monthly/, async (msg) => {
-  const chatId = msg.chat.id
-  const user = await requireUser(chatId, msg.from.id)
-  if (!user) return
-
-  const summary = await getMonthlyBalance(user.user_id)
-  await send(chatId, formatBalance(summary, true))
+  await send(chatId, 'Account disconnected. Your data is safe in FinFlow.')
 })
 
 // ─── /recent ──────────────────────────────────────────────────────────────────
@@ -159,16 +137,6 @@ bot.onText(/\/recent/, async (msg) => {
   await send(chatId, formatRecentTransactions(transactions))
 })
 
-// ─── /budgets ─────────────────────────────────────────────────────────────────
-bot.onText(/\/budgets/, async (msg) => {
-  const chatId = msg.chat.id
-  const user = await requireUser(chatId, msg.from.id)
-  if (!user) return
-
-  const budgets = await getBudgetsWithSpending(user.user_id)
-  await send(chatId, formatBudgets(budgets))
-})
-
 // ─── /limits — show usage ─────────────────────────────────────────────────────
 bot.onText(/\/limits/, async (msg) => {
   const chatId = msg.chat.id
@@ -177,10 +145,10 @@ bot.onText(/\/limits/, async (msg) => {
   const photo = getRateLimitStatus(userId, 'photo')
 
   await send(chatId,
-    `📊 <b>Your Daily Usage</b>\n\n` +
-    `💬 Text parsing: ${text.count}/${text.limit} used (${text.remaining} left)\n` +
-    `📷 Photo scans: ${photo.count}/${photo.limit} used (${photo.remaining} left)\n\n` +
-    `⏰ Resets every midnight`
+    `<b>Daily Usage</b>\n<pre>───────────────────\n` +
+    `Text   ${text.remaining} / ${text.limit} remaining\n` +
+    `Photo  ${photo.remaining} / ${photo.limit} remaining</pre>\n` +
+    `Resets at midnight`
   )
 })
 
@@ -197,7 +165,7 @@ bot.onText(/\/add/, async (msg) => {
   })
 
   await send(chatId,
-    '➕ <b>Manual Transaction Entry</b>\n\nStep 1/5: Enter the <b>amount</b> (numbers only)\n\nExample: <code>500</code>',
+    'Step 1/4: Enter the <b>amount</b>\n\nExample: <code>500</code>',
     { reply_markup: cancelKeyboard() }
   )
 })
@@ -270,37 +238,8 @@ bot.on('message', async (msg) => {
       pending: { ...session.pending, amount }
     })
     await send(chatId,
-      `✅ Amount: <b>₹${amount.toLocaleString('en-IN')}</b>\n\nStep 2/5: Select the <b>type</b>`,
+      `Amount: <b>₹${amount.toLocaleString('en-IN')}</b>\n\nStep 2/4: Select the <b>type</b>`,
       { reply_markup: typeKeyboard() }
-    )
-    return
-  }
-
-  if (session.state === STATE.MANUAL_DATE) {
-    // Accept YYYY-MM-DD or DD/MM/YYYY or "today"
-    let date = text
-    if (text.toLowerCase() === 'today') {
-      date = new Date().toISOString().split('T')[0]
-    } else if (text.includes('/')) {
-      const parts = text.split('/')
-      if (parts.length === 3) {
-        date = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
-      }
-    }
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      await send(chatId, '❌ Invalid date. Use format <code>YYYY-MM-DD</code> or type <code>today</code>', { reply_markup: cancelKeyboard() })
-      return
-    }
-
-    setSession(chatId, {
-      state: STATE.MANUAL_NOTE,
-      pending: { ...session.pending, date }
-    })
-
-    await send(chatId,
-      `✅ Date: <b>${date}</b>\n\nStep 5/5: Add a <b>note</b> (or type <code>skip</code> to leave blank)`,
-      { reply_markup: cancelKeyboard() }
     )
     return
   }
@@ -315,7 +254,7 @@ bot.on('message', async (msg) => {
     })
 
     await send(chatId,
-      '📝 <b>Almost done!</b>\n\n' + formatTransactionPreview(pending),
+      formatTransactionPreview(pending),
       { reply_markup: confirmKeyboard() }
     )
     return
@@ -392,49 +331,6 @@ bot.on('callback_query', async (query) => {
 
   await answer(query.id)
 
-  // ── Menu actions ───────────────────────────────────────────────────────────
-  if (data === 'menu_balance') {
-    const user = await requireUser(chatId, query.from.id)
-    if (!user) return
-    const summary = await getBalanceSummary(user.user_id)
-    await edit(chatId, messageId, formatBalance(summary, false), { reply_markup: mainMenuKeyboard() })
-    return
-  }
-
-  if (data === 'menu_monthly') {
-    const user = await requireUser(chatId, query.from.id)
-    if (!user) return
-    const summary = await getMonthlyBalance(user.user_id)
-    await edit(chatId, messageId, formatBalance(summary, true), { reply_markup: mainMenuKeyboard() })
-    return
-  }
-
-  if (data === 'menu_recent') {
-    const user = await requireUser(chatId, query.from.id)
-    if (!user) return
-    const transactions = await getRecentTransactions(user.user_id)
-    await edit(chatId, messageId, formatRecentTransactions(transactions), { reply_markup: mainMenuKeyboard() })
-    return
-  }
-
-  if (data === 'menu_budgets') {
-    const user = await requireUser(chatId, query.from.id)
-    if (!user) return
-    const budgets = await getBudgetsWithSpending(user.user_id)
-    await edit(chatId, messageId, formatBudgets(budgets), { reply_markup: mainMenuKeyboard() })
-    return
-  }
-
-  if (data === 'menu_manual') {
-    clearSession(chatId)
-    setSession(chatId, { state: STATE.MANUAL_AMOUNT, pending: {} })
-    await edit(chatId, messageId,
-      '➕ <b>Manual Transaction Entry</b>\n\nStep 1/5: Enter the <b>amount</b>\n\nExample: <code>500</code>',
-      { reply_markup: cancelKeyboard() }
-    )
-    return
-  }
-
   // ── Confirm save ───────────────────────────────────────────────────────────
   if (data === 'confirm_save') {
     const user = await requireUser(chatId, query.from.id)
@@ -442,7 +338,7 @@ bot.on('callback_query', async (query) => {
 
     const pending = session.pending
     if (!pending) {
-      await send(chatId, '❌ Session expired. Please try again.')
+      await send(chatId, 'Session expired. Please try again.')
       clearSession(chatId)
       return
     }
@@ -450,7 +346,7 @@ bot.on('callback_query', async (query) => {
     const { data: saved, error } = await saveTransaction(user.user_id, pending)
 
     if (error) {
-      await edit(chatId, messageId, '❌ <b>Failed to save.</b> Please try again.')
+      await edit(chatId, messageId, '[ERROR] Failed to save. Please try again.')
       return
     }
 
@@ -460,9 +356,8 @@ bot.on('callback_query', async (query) => {
     // Check budget alerts
     if (pending.type === 'expense') {
       const alert = await checkBudgetAlerts(user.user_id, pending.category)
-      if (alert) {
-        await send(chatId, formatBudgetAlert(alert))
-      }
+      if (alert) await send(chatId, formatBudgetAlert(alert))
+      await triggerBudgetAlert(user.user_id)
     }
     return
   }
@@ -527,7 +422,7 @@ bot.on('callback_query', async (query) => {
         pending
       })
       await edit(chatId, messageId,
-        `✅ Type: <b>${type}</b>\n\nStep 3/5: Select <b>category</b>`,
+        `Type: <b>${type}</b>\n\nStep 3/4: Select <b>category</b>`,
         { reply_markup: categoryKeyboard(type) }
       )
     } else {
@@ -546,12 +441,13 @@ bot.on('callback_query', async (query) => {
     const pending = { ...session.pending, category }
 
     if (session.state === STATE.MANUAL_CATEGORY) {
+      const today = new Date().toISOString().split('T')[0]
       setSession(chatId, {
-        state: STATE.MANUAL_DATE,
-        pending
+        state: STATE.MANUAL_NOTE,
+        pending: { ...pending, date: today }
       })
       await edit(chatId, messageId,
-        `✅ Category: <b>${category}</b>\n\nStep 4/5: Enter the <b>date</b>\n\nFormat: <code>YYYY-MM-DD</code> or type <code>today</code>`,
+        `Category: <b>${category}</b>\n\nStep 4/4: Add a <b>note</b> (or type <code>skip</code>)`,
         { reply_markup: cancelKeyboard() }
       )
     } else {
@@ -577,7 +473,7 @@ bot.on('callback_query', async (query) => {
   // ── Cancel ─────────────────────────────────────────────────────────────────
   if (data === 'cancel') {
     clearSession(chatId)
-    await edit(chatId, messageId, '❌ <b>Cancelled.</b>\n\nSend a message to add a transaction or use /menu.')
+    await edit(chatId, messageId, 'Cancelled. Send a message or use /add.')
     return
   }
 })
