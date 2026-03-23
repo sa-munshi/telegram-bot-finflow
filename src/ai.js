@@ -61,11 +61,11 @@ async function parseTextWithAI(text, userId = 'default') {
         messages: [
           {
             role: 'system',
-            content: `You are a financial transaction parser for an Indian finance app. The user may write in ANY language (English, Hindi, Bengali, Tamil, Telugu, or any other). Always extract details and return output in ENGLISH only.\n\nExtract transaction details and return ONLY valid JSON. No explanation, no markdown, no extra text.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- food, lunch, dinner, breakfast, restaurant, cafe, swiggy, zomato, dominos → Food & Dining\n- uber, ola, auto, rickshaw, petrol, diesel, bus, metro, train ticket → Transport\n- amazon, flipkart, shopping, clothes, shoes, mall → Shopping\n- electricity, water, internet, wifi, mobile bill, recharge, gas bill → Bills & Utilities\n- movie, netflix, spotify, game, concert → Entertainment\n- doctor, medicine, hospital, pharmacy, medical → Health\n- school, college, course, fees, books → Education\n- rent, house rent, apartment, pg → Rent\n- grocery, vegetables, fruits, kirana, supermarket → Groceries\n- salon, parlour, haircut, spa → Personal Care\n- salary, stipend, payment received → Salary\n- freelance, project payment, client → Freelance\n- business income, shop income → Business\n- mutual fund, stocks, fd, investment → Investment\n- gift, birthday, wedding gift → Gift\n\nRules:\n- amount: number only, no currency symbols\n- type: "income" or "expense" only\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not mentioned\n- note: brief description in ENGLISH, capitalize first letter\n- If text is in Hindi/Bengali/any language, translate the note to English\n\nToday's date: ${today}\n\nReturn ONLY this JSON format:\n{\n  "amount": 500,\n  "type": "expense",\n  "category": "Food & Dining",\n  "date": "${today}",\n  "note": "Lunch at restaurant"\n}`
+            content: `You are a financial transaction parser for an Indian finance app. The user may write in ANY language (English, Hindi, Bengali, Tamil, Telugu, or any other). Always extract details and return output in ENGLISH only.\n\nExtract transaction details and return ONLY valid JSON. No explanation, no markdown, no extra text.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- food, lunch, dinner, breakfast, restaurant, cafe, swiggy, zomato, dominos → Food & Dining\n- uber, ola, auto, rickshaw, petrol, diesel, bus, metro, train ticket → Transport\n- amazon, flipkart, shopping, clothes, shoes, mall → Shopping\n- electricity, water, internet, wifi, mobile bill, recharge, gas bill → Bills & Utilities\n- movie, netflix, spotify, game, concert → Entertainment\n- doctor, medicine, hospital, pharmacy, medical → Health\n- school, college, course, fees, books → Education\n- rent, house rent, apartment, pg → Rent\n- grocery, vegetables, fruits, kirana, supermarket → Groceries\n- salon, parlour, haircut, spa → Personal Care\n- salary, stipend, payment received → Salary\n- freelance, project payment, client → Freelance\n- business income, shop income → Business\n- mutual fund, stocks, fd, investment → Investment\n- gift, birthday, wedding gift → Gift\n\nRules:\n- amount: number only, no currency symbols\n- type: "income" or "expense" only\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not mentioned\n- note: brief description in ENGLISH, capitalize first letter\n- If text is in Hindi/Bengali/any language, translate the note to English\n\nBULK TRANSACTIONS: If the message contains multiple transactions (e.g. "spent 500 on lunch, 200 auto, 1200 grocery"), return a JSON ARRAY of objects. If single transaction, return a single JSON object (NOT an array).\n\nToday's date: ${today}\n\nFor single transaction return:\n{\n  "amount": 500,\n  "type": "expense",\n  "category": "Food & Dining",\n  "date": "${today}",\n  "note": "Lunch at restaurant"\n}\n\nFor multiple transactions return:\n[\n  { "amount": 500, "type": "expense", "category": "Food & Dining", "date": "${today}", "note": "Lunch" },\n  { "amount": 200, "type": "expense", "category": "Transport", "date": "${today}", "note": "Auto rickshaw" }\n]`
           },
           { role: 'user', content: text }
         ],
-        max_tokens: 600,
+        max_tokens: 800,
         temperature: 0.1
       })
     })
@@ -80,6 +80,22 @@ async function parseTextWithAI(text, userId = 'default') {
     if (!content) return null
 
     content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+
+    // Try array first (bulk transactions)
+    const arrayMatch = content.match(/\[[\s\S]*\]/)
+    if (arrayMatch) {
+      try {
+        const result = JSON.parse(arrayMatch[0])
+        if (Array.isArray(result) && result.length > 0) {
+          result.forEach(r => {
+            if (r.note) r.note = r.note.charAt(0).toUpperCase() + r.note.slice(1)
+          })
+          return result
+        }
+      } catch(e) {
+        // fall through to single object parsing
+      }
+    }
 
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
@@ -129,10 +145,10 @@ async function parsePhotoWithAI(base64Image, mimeType, userId = 'default') {
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Image } },
-              { text: `You are a receipt and document scanner for an Indian finance app. The receipt may be in ANY language. Always extract details and return output in ENGLISH only. Currency is INR (Indian Rupees ₹).\n\nAnalyze this receipt/bill/document image carefully and extract transaction details.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- restaurant, cafe, hotel food, swiggy, zomato → Food & Dining\n- petrol pump, fuel, cab, taxi, bus, metro → Transport\n- retail store, mall, amazon, flipkart, clothes → Shopping\n- electricity bill, water bill, internet, mobile recharge → Bills & Utilities\n- pharmacy, medical store, hospital, clinic → Health\n- grocery store, supermarket, kirana, vegetables → Groceries\n\nRules:\n- amount: total amount as number, no currency symbols\n- type: always "expense" for receipts\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not visible\n- note: merchant name or brief description in ENGLISH, max 50 characters, capitalize first letter\n- confidence: 0.0 to 1.0 how confident you are\n\nToday's date: ${today}\n\nReturn ONLY this JSON format, no explanation, no markdown backticks:\n{\n  "amount": 1200,\n  "type": "expense",\n  "category": "Groceries",\n  "date": "${today}",\n  "note": "Big Bazaar grocery shopping",\n  "confidence": 0.95\n}` }
+              { text: `You are a receipt and document scanner for an Indian finance app. The receipt may be in ANY language. Always extract details and return output in ENGLISH only. Currency is INR (Indian Rupees ₹).\n\nAnalyze this receipt/bill/document image carefully and extract transaction details.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- restaurant, cafe, hotel food, swiggy, zomato → Food & Dining\n- petrol pump, fuel, cab, taxi, bus, metro → Transport\n- retail store, mall, amazon, flipkart, clothes → Shopping\n- electricity bill, water bill, internet, mobile recharge → Bills & Utilities\n- pharmacy, medical store, hospital, clinic → Health\n- grocery store, supermarket, kirana, vegetables → Groceries\n\nAMOUNT RULES (critical — follow exactly):\n- amount: exact total as number, preserve decimals\n- ₹19.00 = 19, NOT 190 or 1900\n- ₹1,200 = 1200\n- ₹19.50 = 19.50\n- Never multiply or modify the amount\n- If amount has paise (decimal), keep as decimal number\n- Look for "Amount Paid", "Total", "Grand Total", "Net Amount" fields on the receipt for the correct total amount\n- Remove commas from numbers (₹1,200 → 1200)\n- Remove currency symbols (₹ or Rs)\n\nOther rules:\n- type: always "expense" for receipts\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not visible\n- note: merchant name or brief description in ENGLISH, max 50 characters, capitalize first letter\n- confidence: 0.0 to 1.0 how confident you are\n\nMULTI-ITEM RECEIPTS:\n- For most receipts (restaurant bill, Jio recharge, utility bill, cab receipt): return the TOTAL as a SINGLE transaction object\n- Only return an ARRAY if the receipt is clearly a multi-category receipt (e.g. supermarket bill with Food AND Electronics AND Clothing)\n- When returning array, each item needs a distinct category\n\nToday's date: ${today}\n\nFor single item return ONLY this JSON (no markdown, no backticks):\n{\n  "amount": 1200,\n  "type": "expense",\n  "category": "Groceries",\n  "date": "${today}",\n  "note": "Big Bazaar grocery shopping",\n  "confidence": 0.95\n}\n\nFor multi-category receipt return ONLY a JSON array:\n[\n  { "amount": 150, "type": "expense", "category": "Groceries", "date": "${today}", "note": "Rice 5kg", "confidence": 0.9 },\n  { "amount": 80, "type": "expense", "category": "Groceries", "date": "${today}", "note": "Dal 1kg", "confidence": 0.9 }\n]` }
             ]
           }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 300 }
+          generationConfig: { temperature: 0.1, maxOutputTokens: 600 }
         })
       }
     )
@@ -146,7 +162,25 @@ async function parsePhotoWithAI(base64Image, mimeType, userId = 'default') {
     const content = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text
     if (!content) return null
 
-    const jsonMatch = content.trim().match(/\{[\s\S]*\}/)
+    const cleaned = content.trim()
+
+    // Try array first (multi-item receipts)
+    const arrayMatch = cleaned.match(/\[[\s\S]*\]/)
+    if (arrayMatch) {
+      try {
+        const result = JSON.parse(arrayMatch[0])
+        if (Array.isArray(result) && result.length > 0) {
+          result.forEach(r => {
+            if (r.note) r.note = r.note.charAt(0).toUpperCase() + r.note.slice(1)
+          })
+          return result
+        }
+      } catch(e) {
+        // fall through to single object parsing
+      }
+    }
+
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
 
     const result = JSON.parse(jsonMatch[0])

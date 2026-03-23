@@ -2,6 +2,12 @@
 // Stores pending transactions and conversation state per user
 const sessions = new Map()
 
+// Preview preference per user (chatId → boolean, default false)
+const previewEnabled = new Map()
+
+// Pending bulk transactions awaiting confirmation (chatId → array)
+const pendingBulkMap = new Map()
+
 // Session states
 const STATE = {
   IDLE: 'idle',
@@ -43,4 +49,30 @@ function clearSession(chatId) {
   })
 }
 
-module.exports = { STATE, getSession, setSession, clearSession }
+// ─── Preview preference ───────────────────────────────────────────────────────
+function getPreview(chatId) {
+  return previewEnabled.get(String(chatId)) === true
+}
+
+function setPreview(chatId, enabled) {
+  previewEnabled.set(String(chatId), Boolean(enabled))
+}
+
+// ─── Pending bulk transactions ────────────────────────────────────────────────
+function getPendingBulk(chatId) {
+  return pendingBulkMap.get(String(chatId)) || null
+}
+
+function setPendingBulk(chatId, transactions) {
+  pendingBulkMap.set(String(chatId), transactions)
+}
+
+function clearPendingBulk(chatId) {
+  pendingBulkMap.delete(String(chatId))
+}
+
+module.exports = {
+  STATE, getSession, setSession, clearSession,
+  getPreview, setPreview,
+  getPendingBulk, setPendingBulk, clearPendingBulk
+}

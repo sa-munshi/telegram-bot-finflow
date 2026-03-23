@@ -14,16 +14,20 @@ const {
   triggerBudgetAlert
 } = require('./db')
 const {
+  formatINR,
   formatTransactionPreview,
   formatSavedTransaction,
   formatAppNotification,
   formatBudgetAlert,
   formatBalance,
   formatRecentTransactions,
-  formatBudgets
+  formatBudgets,
+  formatBulkPreview,
+  formatBulkSummary
 } = require('./messages')
 const {
   confirmKeyboard,
+  confirmAllKeyboard,
   editFieldKeyboard,
   typeKeyboard,
   categoryKeyboard,
@@ -31,7 +35,12 @@ const {
   cancelKeyboard,
   backToPreviewKeyboard
 } = require('./keyboards')
-const { STATE, getSession, setSession, clearSession } = require('./session')
+const {
+  STATE,
+  getSession, setSession, clearSession,
+  getPreview, setPreview,
+  getPendingBulk, setPendingBulk, clearPendingBulk
+} = require('./session')
 const supabase = require('./supabase')
 
 // ─── Init bot ─────────────────────────────────────────────────────────────────
@@ -103,11 +112,15 @@ bot.onText(/\/help/, async (msg) => {
     `· Send a receipt photo\n` +
     `· Use /add for step-by-step\n\n` +
     `Commands:\n` +
-    `/recent     — Last 5 transactions\n` +
-    `/add        — Manual entry\n` +
-    `/limits     — Daily usage\n` +
-    `/disconnect — Unlink account\n` +
-    `/help       — This message`
+    `• preview on   — Enable transaction preview\n` +
+    `• preview off  — Disable preview (default)\n` +
+    `• balance      — All time summary\n` +
+    `• monthly      — This month summary\n` +
+    `• recent       — Last 5 transactions\n` +
+    `• disconnect   — Unlink account\n` +
+    `• help         — Show this message\n\n` +
+    `/add    — Manual entry\n` +
+    `/limits — Daily usage`
   )
 })
 
@@ -196,6 +209,38 @@ bot.on('photo', async (msg) => {
       return
     }
 
+    // ── Bulk array result ────────────────────────────────────────────────────
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      if (!getPreview(chatId)) {
+        // Preview OFF → save all immediately
+        let savedCount = 0
+        let failedCount = 0
+        for (const txn of parsed) {
+          try {
+            const { error } = await saveTransaction(user.user_id, txn)
+            if (error) failedCount++
+            else savedCount++
+          } catch (e) {
+            failedCount++
+          }
+        }
+        await edit(chatId, processingMsg.message_id,
+          '📷 <b>Receipt Scanned!</b>\n\n' + formatBulkSummary(parsed, savedCount, failedCount)
+        )
+        const hasExpenses = parsed.some(t => t.type === 'expense')
+        if (hasExpenses) await triggerBudgetAlert(user.user_id)
+      } else {
+        // Preview ON → store and show with Save All/Cancel
+        setPendingBulk(chatId, parsed)
+        await edit(chatId, processingMsg.message_id,
+          '📷 <b>Receipt Scanned!</b>\n\n' + formatBulkPreview(parsed),
+          { reply_markup: confirmAllKeyboard() }
+        )
+      }
+      return
+    }
+
+    // ── Single result ────────────────────────────────────────────────────────
     if (!parsed || !parsed.amount) {
       await edit(chatId, processingMsg.message_id,
         '❌ <b>Could not parse this image.</b>\n\nMake sure:\n• The receipt is clear and readable\n• Lighting is good\n• Try sending a cleaner photo\n\nOr type the transaction manually instead.'
@@ -203,16 +248,33 @@ bot.on('photo', async (msg) => {
       return
     }
 
-    setSession(chatId, {
-      state: STATE.AWAITING_CONFIRM,
-      pending: parsed,
-      editMessageId: processingMsg.message_id
-    })
-
-    await edit(chatId, processingMsg.message_id,
-      '📷 <b>Receipt Scanned!</b>\n\n' + formatTransactionPreview(parsed),
-      { reply_markup: confirmKeyboard() }
-    )
+    if (!getPreview(chatId)) {
+      // Preview OFF → save immediately
+      const { error } = await saveTransaction(user.user_id, parsed)
+      if (error) {
+        await edit(chatId, processingMsg.message_id, '❌ Failed to save. Please try again.')
+        return
+      }
+      await edit(chatId, processingMsg.message_id,
+        '📷 <b>Receipt Scanned!</b>\n\n' + formatSavedTransaction(parsed)
+      )
+      if (parsed.type === 'expense') {
+        const alert = await checkBudgetAlerts(user.user_id, parsed.category)
+        if (alert) await send(chatId, formatBudgetAlert(alert))
+        await triggerBudgetAlert(user.user_id)
+      }
+    } else {
+      // Preview ON → show with Save/Edit/Cancel
+      setSession(chatId, {
+        state: STATE.AWAITING_CONFIRM,
+        pending: parsed,
+        editMessageId: processingMsg.message_id
+      })
+      await edit(chatId, processingMsg.message_id,
+        '📷 <b>Receipt Scanned!</b>\n\n' + formatTransactionPreview(parsed),
+        { reply_markup: confirmKeyboard() }
+      )
+    }
   } catch (err) {
     console.error('Photo handler error:', err)
     await edit(chatId, processingMsg.message_id, '❌ Something went wrong. Please try again.')
@@ -224,7 +286,105 @@ bot.on('message', async (msg) => {
   if (!msg.text || msg.text.startsWith('/')) return
   const chatId = msg.chat.id
   const text = msg.text.trim()
+  const textLower = text.toLowerCase()
   const session = getSession(chatId)
+
+  // ── Preview toggle commands ────────────────────────────────────────────────
+  if (textLower === 'preview on') {
+    setPreview(chatId, true)
+    await send(chatId,
+      '✅ <b>Preview enabled</b>\n\nYou\'ll see transaction details before saving. Send <b>preview off</b> to disable.'
+    )
+    return
+  }
+
+  if (textLower === 'preview off') {
+    setPreview(chatId, false)
+    await send(chatId,
+      '✅ <b>Preview disabled</b>\n\nTransactions will save instantly. Send <b>preview on</b> to enable preview.'
+    )
+    return
+  }
+
+  // ── Help command ───────────────────────────────────────────────────────────
+  if (textLower === 'help') {
+    await send(chatId,
+      `<b>FinFlow Bot</b>\n\n` +
+      `Add transactions:\n` +
+      `· Type naturally — "spent 500 on lunch"\n` +
+      `· Send a receipt photo\n` +
+      `· Use /add for step-by-step\n\n` +
+      `Commands:\n` +
+      `• preview on   — Enable transaction preview\n` +
+      `• preview off  — Disable preview (default)\n` +
+      `• balance      — All time summary\n` +
+      `• monthly      — This month summary\n` +
+      `• recent       — Last 5 transactions\n` +
+      `• disconnect   — Unlink account\n` +
+      `• help         — Show this message\n\n` +
+      `/add    — Manual entry\n` +
+      `/limits — Daily usage`
+    )
+    return
+  }
+
+  // ── Info commands — require connected user ─────────────────────────────────
+  if (textLower === 'balance') {
+    const user = await requireUser(chatId, msg.from.id)
+    if (!user) return
+    try {
+      const summary = await getBalanceSummary(user.user_id)
+      await send(chatId, formatBalance(summary, false))
+    } catch (err) {
+      console.error('Balance error:', err.message)
+      await send(chatId, '❌ Could not fetch balance. Please try again.')
+    }
+    return
+  }
+
+  if (textLower === 'monthly') {
+    const user = await requireUser(chatId, msg.from.id)
+    if (!user) return
+    try {
+      const summary = await getMonthlyBalance(user.user_id)
+      await send(chatId, formatBalance(summary, true))
+    } catch (err) {
+      console.error('Monthly error:', err.message)
+      await send(chatId, '❌ Could not fetch monthly balance. Please try again.')
+    }
+    return
+  }
+
+  if (textLower === 'recent') {
+    const user = await requireUser(chatId, msg.from.id)
+    if (!user) return
+    try {
+      const transactions = await getRecentTransactions(user.user_id, 5)
+      await send(chatId, formatRecentTransactions(transactions))
+    } catch (err) {
+      console.error('Recent error:', err.message)
+      await send(chatId, '❌ Could not fetch recent transactions. Please try again.')
+    }
+    return
+  }
+
+  if (textLower === 'disconnect') {
+    try {
+      const { error } = await supabase
+        .from('settings')
+        .update({ telegram_id: null, telegram_chat_id: null })
+        .eq('telegram_id', msg.from.id.toString())
+      if (error) {
+        await send(chatId, '[ERROR] Could not disconnect. Please try again.')
+        return
+      }
+      await send(chatId, 'Account disconnected. Your data is safe in FinFlow.')
+    } catch (err) {
+      console.error('Disconnect error:', err.message)
+      await send(chatId, '❌ Could not disconnect. Please try again.')
+    }
+    return
+  }
 
   // ── Manual entry flow ──────────────────────────────────────────────────────
   if (session.state === STATE.MANUAL_AMOUNT) {
@@ -303,6 +463,38 @@ bot.on('message', async (msg) => {
     return
   }
 
+  // ── Bulk array result ────────────────────────────────────────────────────
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    if (!getPreview(chatId)) {
+      // Preview OFF → save all immediately
+      let savedCount = 0
+      let failedCount = 0
+      for (const txn of parsed) {
+        try {
+          const { error } = await saveTransaction(user.user_id, txn)
+          if (error) failedCount++
+          else savedCount++
+        } catch (e) {
+          failedCount++
+        }
+      }
+      await edit(chatId, processingMsg.message_id,
+        formatBulkSummary(parsed, savedCount, failedCount)
+      )
+      const hasExpenses = parsed.some(t => t.type === 'expense')
+      if (hasExpenses) await triggerBudgetAlert(user.user_id)
+    } else {
+      // Preview ON → store and show with Save All/Cancel
+      setPendingBulk(chatId, parsed)
+      await edit(chatId, processingMsg.message_id,
+        formatBulkPreview(parsed),
+        { reply_markup: confirmAllKeyboard() }
+      )
+    }
+    return
+  }
+
+  // ── Single result ────────────────────────────────────────────────────────
   if (!parsed || !parsed.amount) {
     await edit(chatId, processingMsg.message_id,
       '❌ <b>Could not understand that.</b>\n\nTry:\n• "spent 500 on lunch"\n• "received 50000 salary"\n• "paid 1200 electricity bill"\n\nOr use /add for manual entry.'
@@ -310,16 +502,31 @@ bot.on('message', async (msg) => {
     return
   }
 
-  setSession(chatId, {
-    state: STATE.AWAITING_CONFIRM,
-    pending: parsed,
-    editMessageId: processingMsg.message_id
-  })
-
-  await edit(chatId, processingMsg.message_id,
-    formatTransactionPreview(parsed),
-    { reply_markup: confirmKeyboard() }
-  )
+  if (!getPreview(chatId)) {
+    // Preview OFF → save immediately
+    const { error } = await saveTransaction(user.user_id, parsed)
+    if (error) {
+      await edit(chatId, processingMsg.message_id, '❌ Failed to save. Please try again.')
+      return
+    }
+    await edit(chatId, processingMsg.message_id, formatSavedTransaction(parsed))
+    if (parsed.type === 'expense') {
+      const alert = await checkBudgetAlerts(user.user_id, parsed.category)
+      if (alert) await send(chatId, formatBudgetAlert(alert))
+      await triggerBudgetAlert(user.user_id)
+    }
+  } else {
+    // Preview ON → show with Save/Edit/Cancel
+    setSession(chatId, {
+      state: STATE.AWAITING_CONFIRM,
+      pending: parsed,
+      editMessageId: processingMsg.message_id
+    })
+    await edit(chatId, processingMsg.message_id,
+      formatTransactionPreview(parsed),
+      { reply_markup: confirmKeyboard() }
+    )
+  }
 })
 
 // ─── Handle callback queries (button presses) ─────────────────────────────────
@@ -330,6 +537,38 @@ bot.on('callback_query', async (query) => {
   const session = getSession(chatId)
 
   await answer(query.id)
+
+  // ── Confirm save all (bulk) ────────────────────────────────────────────────
+  if (data === 'confirm_save_all') {
+    const user = await requireUser(chatId, query.from.id)
+    if (!user) return
+
+    const bulk = getPendingBulk(chatId)
+    if (!bulk || bulk.length === 0) {
+      await edit(chatId, messageId, 'Session expired. Please try again.')
+      clearPendingBulk(chatId)
+      return
+    }
+
+    let savedCount = 0
+    let failedCount = 0
+    for (const txn of bulk) {
+      try {
+        const { error } = await saveTransaction(user.user_id, txn)
+        if (error) failedCount++
+        else savedCount++
+      } catch (e) {
+        failedCount++
+      }
+    }
+
+    clearPendingBulk(chatId)
+    await edit(chatId, messageId, formatBulkSummary(bulk, savedCount, failedCount))
+
+    const hasExpenses = bulk.some(t => t.type === 'expense')
+    if (hasExpenses) await triggerBudgetAlert(user.user_id)
+    return
+  }
 
   // ── Confirm save ───────────────────────────────────────────────────────────
   if (data === 'confirm_save') {
