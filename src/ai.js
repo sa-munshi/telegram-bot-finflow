@@ -61,7 +61,7 @@ async function parseTextWithAI(text, userId = 'default') {
         messages: [
           {
             role: 'system',
-            content: `You are a financial transaction parser for an Indian finance app. Extract transaction details from text (English, Hindi, or Bengali) and return ONLY valid JSON.\n\nCategories available:\nExpense: Food & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Other\nIncome: Salary, Freelance, Business, Investment, Gift\n\nReturn this exact JSON format:\n{\n  "amount": <number only, no currency symbols>,\n  "type": "income" or "expense",\n  "category": "<exact category name from list above>",\n  "note": "<brief description in English>",\n  "date": "<YYYY-MM-DD format, use today if not mentioned>"\n}\n\nToday's date: ${today}\nReturn ONLY the JSON object, no explanation, no markdown.`
+            content: `You are a financial transaction parser for an Indian finance app. The user may write in ANY language (English, Hindi, Bengali, Tamil, Telugu, or any other). Always extract details and return output in ENGLISH only.\n\nExtract transaction details and return ONLY valid JSON. No explanation, no markdown, no extra text.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- food, lunch, dinner, breakfast, restaurant, cafe, swiggy, zomato, dominos → Food & Dining\n- uber, ola, auto, rickshaw, petrol, diesel, bus, metro, train ticket → Transport\n- amazon, flipkart, shopping, clothes, shoes, mall → Shopping\n- electricity, water, internet, wifi, mobile bill, recharge, gas bill → Bills & Utilities\n- movie, netflix, spotify, game, concert → Entertainment\n- doctor, medicine, hospital, pharmacy, medical → Health\n- school, college, course, fees, books → Education\n- rent, house rent, apartment, pg → Rent\n- grocery, vegetables, fruits, kirana, supermarket → Groceries\n- salon, parlour, haircut, spa → Personal Care\n- salary, stipend, payment received → Salary\n- freelance, project payment, client → Freelance\n- business income, shop income → Business\n- mutual fund, stocks, fd, investment → Investment\n- gift, birthday, wedding gift → Gift\n\nRules:\n- amount: number only, no currency symbols\n- type: "income" or "expense" only\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not mentioned\n- note: brief description in ENGLISH, capitalize first letter\n- If text is in Hindi/Bengali/any language, translate the note to English\n\nToday's date: ${today}\n\nReturn ONLY this JSON format:\n{\n  "amount": 500,\n  "type": "expense",\n  "category": "Food & Dining",\n  "date": "${today}",\n  "note": "Lunch at restaurant"\n}`
           },
           { role: 'user', content: text }
         ],
@@ -85,13 +85,21 @@ async function parseTextWithAI(text, userId = 'default') {
     if (!jsonMatch) return null
 
     try {
-      return JSON.parse(jsonMatch[0])
+      const result = JSON.parse(jsonMatch[0])
+      if (result.note) {
+        result.note = result.note.charAt(0).toUpperCase() + result.note.slice(1)
+      }
+      return result
     } catch(e) {
       let attempt = jsonMatch[0]
       const opens = (attempt.match(/\{/g) || []).length
       const closes = (attempt.match(/\}/g) || []).length
       attempt += '}'.repeat(Math.max(0, opens - closes))
-      return JSON.parse(attempt)
+      const result = JSON.parse(attempt)
+      if (result.note) {
+        result.note = result.note.charAt(0).toUpperCase() + result.note.slice(1)
+      }
+      return result
     }
   } catch (err) {
     console.error('Text parse error:', err.message)
@@ -121,7 +129,7 @@ async function parsePhotoWithAI(base64Image, mimeType, userId = 'default') {
           contents: [{
             parts: [
               { inline_data: { mime_type: mimeType, data: base64Image } },
-              { text: `Analyze this receipt or bill image and extract transaction details. Return ONLY valid JSON in this exact format:\n{\n  "amount": <total amount as number, no currency symbols>,\n  "type": "expense",\n  "category": "<one of: Food & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Groceries, Personal Care, Other>",\n  "note": "<merchant name or brief description, max 50 chars>",\n  "date": "<YYYY-MM-DD format, use today ${today} if not visible on receipt>"\n}\nReturn ONLY the JSON object, no explanation, no markdown backticks.` }
+              { text: `You are a receipt and document scanner for an Indian finance app. The receipt may be in ANY language. Always extract details and return output in ENGLISH only. Currency is INR (Indian Rupees ₹).\n\nAnalyze this receipt/bill/document image carefully and extract transaction details.\n\nCategories (use EXACTLY one):\nFood & Dining, Transport, Shopping, Bills & Utilities, Entertainment, Health, Education, Rent, Groceries, Personal Care, Salary, Freelance, Business, Investment, Gift, Other\n\nSmart category matching rules:\n- restaurant, cafe, hotel food, swiggy, zomato → Food & Dining\n- petrol pump, fuel, cab, taxi, bus, metro → Transport\n- retail store, mall, amazon, flipkart, clothes → Shopping\n- electricity bill, water bill, internet, mobile recharge → Bills & Utilities\n- pharmacy, medical store, hospital, clinic → Health\n- grocery store, supermarket, kirana, vegetables → Groceries\n\nRules:\n- amount: total amount as number, no currency symbols\n- type: always "expense" for receipts\n- category: EXACTLY one from list above\n- date: YYYY-MM-DD format, use today if not visible\n- note: merchant name or brief description in ENGLISH, max 50 characters, capitalize first letter\n- confidence: 0.0 to 1.0 how confident you are\n\nToday's date: ${today}\n\nReturn ONLY this JSON format, no explanation, no markdown backticks:\n{\n  "amount": 1200,\n  "type": "expense",\n  "category": "Groceries",\n  "date": "${today}",\n  "note": "Big Bazaar grocery shopping",\n  "confidence": 0.95\n}` }
             ]
           }],
           generationConfig: { temperature: 0.1, maxOutputTokens: 300 }
@@ -141,7 +149,11 @@ async function parsePhotoWithAI(base64Image, mimeType, userId = 'default') {
     const jsonMatch = content.trim().match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
 
-    return JSON.parse(jsonMatch[0])
+    const result = JSON.parse(jsonMatch[0])
+    if (result.note) {
+      result.note = result.note.charAt(0).toUpperCase() + result.note.slice(1)
+    }
+    return result
   } catch (err) {
     console.error('Photo parse error:', err.message)
     return null
