@@ -24,7 +24,7 @@ finflow-bot/
 ├── src/
 │   ├── index.js      ← Entry point + Express server
 │   ├── bot.js        ← All bot handlers
-│   ├── ai.js         ← Mistral + Gemini AI helpers
+│   ├── ai.js         ← Sarvam AI + Gemini AI helpers
 │   ├── db.js         ← Supabase database operations
 │   ├── messages.js   ← Message formatters
 │   ├── keyboards.js  ← Inline keyboard builders
@@ -60,7 +60,7 @@ cp .env.example .env
 | `TELEGRAM_BOT_TOKEN` | @BotFather on Telegram |
 | `SUPABASE_URL` | Supabase project settings |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase project settings → API |
-| `MISTRAL_API_KEY` | console.mistral.ai |
+| `SARVAM_API_KEY` | [console.sarvam.ai](https://console.sarvam.ai) |
 | `GEMINI_API_KEY` | ai.google.dev |
 | `WEBHOOK_SECRET` | Any random string (e.g. `abc123xyz`) |
 
