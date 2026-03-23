@@ -118,8 +118,21 @@ function backToPreviewKeyboard() {
   }
 }
 
+// ─── Confirm all / Cancel keyboard for bulk preview ──────────────────────────
+function confirmAllKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '✅ Save All', callback_data: 'confirm_save_all' },
+        { text: '❌ Cancel', callback_data: 'cancel' }
+      ]
+    ]
+  }
+}
+
 module.exports = {
   confirmKeyboard,
+  confirmAllKeyboard,
   editFieldKeyboard,
   typeKeyboard,
   categoryKeyboard,

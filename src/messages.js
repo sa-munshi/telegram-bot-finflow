@@ -120,6 +120,47 @@ function formatBudgets(budgets) {
   return `<b>This Month's Budgets</b>\n\n${list}`
 }
 
+// ─── Format bulk transaction preview ─────────────────────────────────────────
+function formatBulkPreview(transactions) {
+  const count = transactions.length
+  const total = transactions
+    .filter(t => t.type === 'expense')
+    .reduce((s, t) => s + Number(t.amount), 0)
+
+  const items = transactions.map(t => {
+    const icon = t.type === 'income' ? '🟢' : '🔴'
+    const note = t.note ? ` · ${t.note}` : ''
+    return `${icon} ${formatINR(t.amount)} · ${t.category}${note}`
+  }).join('\n')
+
+  let msg = `📋 <b>${count} Transaction${count !== 1 ? 's' : ''} Found</b>\n`
+  msg += `──────────────────\n`
+  msg += items + '\n'
+  msg += `──────────────────\n`
+  if (total > 0) msg += `Total: <b>${formatINR(total)}</b>`
+  return msg
+}
+
+// ─── Format bulk save confirmation ───────────────────────────────────────────
+function formatBulkSummary(transactions, savedCount, failedCount) {
+  const total = transactions
+    .filter(t => t.type === 'expense')
+    .reduce((s, t) => s + Number(t.amount), 0)
+
+  const items = transactions.map(t => {
+    const icon = t.type === 'income' ? '🟢' : '🔴'
+    return `${icon} ${formatINR(t.amount)} · ${t.category}`
+  }).join('\n')
+
+  let msg = `✅ <b>${savedCount} Transaction${savedCount !== 1 ? 's' : ''} Saved</b>\n`
+  msg += `──────────────────\n`
+  msg += items + '\n'
+  msg += `──────────────────\n`
+  if (total > 0) msg += `Total spent: <b>${formatINR(total)}</b>`
+  if (failedCount > 0) msg += `\n⚠️ ${failedCount} transaction(s) failed to save`
+  return msg
+}
+
 module.exports = {
   formatINR,
   formatTransactionPreview,
@@ -128,5 +169,7 @@ module.exports = {
   formatBudgetAlert,
   formatBalance,
   formatRecentTransactions,
-  formatBudgets
+  formatBudgets,
+  formatBulkPreview,
+  formatBulkSummary
 }
