@@ -1,6 +1,5 @@
 require('dotenv').config()
 const TelegramBot = require('node-telegram-bot-api')
-const express = require('express')
 
 const { parseTextWithAI, parsePhotoWithAI, downloadTelegramFile, getRateLimitStatus } = require('./ai')
 const {
@@ -14,7 +13,6 @@ const {
   triggerBudgetAlert
 } = require('./db')
 const {
-  formatINR,
   formatTransactionPreview,
   formatSavedTransaction,
   formatAppNotification,
@@ -63,7 +61,7 @@ async function edit(chatId, messageId, text, options = {}) {
       ...options
     })
   } catch (e) {
-    // Message might not have changed, ignore
+    // Ignore "message not modified" errors
   }
 }
 
@@ -79,7 +77,11 @@ async function requireUser(chatId, telegramId) {
   const user = await getUserByTelegramId(telegramId)
   if (!user) {
     await send(chatId,
-      `Account not linked.\n\nGo to FinFlow app → Settings → Connect Telegram\nEnter your Chat ID: <code>${chatId}</code>`
+      `🔗 <b>Account not linked yet</b>\n\n` +
+      `To get started:\n` +
+      `1. Open the <b>FinFlow app</b>\n` +
+      `2. Go to <b>Settings → Connect Telegram</b>\n` +
+      `3. Enter your Chat ID: <code>${chatId}</code>`
     )
     return null
   }
@@ -93,11 +95,19 @@ bot.onText(/\/start/, async (msg) => {
 
   if (user) {
     await send(chatId,
-      `Welcome back, <b>${user.name || msg.from.first_name || 'there'}</b>.\n\nYour account is connected. Use /help to see commands.`
+      `👋 Welcome back, <b>${user.name || msg.from.first_name || 'there'}</b>!\n\n` +
+      `Your FinFlow account is connected and ready.\n\n` +
+      `Just type a transaction like <i>"spent 500 on lunch"</i> or send a receipt photo to get started.\n\n` +
+      `Type <b>help</b> to see all commands.`
     )
   } else {
     await send(chatId,
-      `Account not linked.\n\nGo to FinFlow app → Settings → Connect Telegram\nEnter your Chat ID: <code>${chatId}</code>`
+      `👋 <b>Welcome to FinFlow Bot!</b>\n\n` +
+      `Track your expenses by just chatting — no forms, no fuss.\n\n` +
+      `🔗 <b>To link your account:</b>\n` +
+      `1. Open the <b>FinFlow app</b>\n` +
+      `2. Settings → Connect Telegram\n` +
+      `3. Enter your Chat ID: <code>${chatId}</code>`
     )
   }
 })
@@ -106,21 +116,21 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/help/, async (msg) => {
   const chatId = msg.chat.id
   await send(chatId,
-    `<b>FinFlow Bot</b>\n\n` +
-    `Add transactions:\n` +
-    `· Type naturally — "spent 500 on lunch"\n` +
-    `· Send a receipt photo\n` +
-    `· Use /add for step-by-step\n\n` +
-    `Commands:\n` +
-    `• preview on   — Enable transaction preview\n` +
-    `• preview off  — Disable preview (default)\n` +
-    `• balance      — All time summary\n` +
-    `• monthly      — This month summary\n` +
-    `• recent       — Last 5 transactions\n` +
-    `• disconnect   — Unlink account\n` +
-    `• help         — Show this message\n\n` +
-    `/add    — Manual entry\n` +
-    `/limits — Daily usage`
+    `📖 <b>FinFlow Bot — How it works</b>\n\n` +
+    `<b>Add a transaction</b>\n` +
+    `· Just type it — <i>"spent 500 on lunch"</i>\n` +
+    `· Send multiple — <i>"lunch 200, auto 80, groceries 1200"</i>\n` +
+    `· Take a photo of any receipt 📷\n` +
+    `· Step-by-step with /add\n\n` +
+    `<b>View your data</b>\n` +
+    `· <b>balance</b> — overall income vs expense\n` +
+    `· <b>monthly</b> — this month's summary\n` +
+    `· <b>recent</b> — last 5 transactions\n\n` +
+    `<b>Settings</b>\n` +
+    `· <b>preview on/off</b> — review before saving\n` +
+    `· <b>disconnect</b> — unlink this account\n` +
+    `· /limits — check daily usage\n\n` +
+    `<i>Works in English, Hindi, Bengali and more 🇮🇳</i>`
   )
 })
 
@@ -133,11 +143,11 @@ bot.onText(/\/disconnect/, async (msg) => {
     .eq('telegram_id', msg.from.id.toString())
 
   if (error) {
-    await send(chatId, '[ERROR] Could not disconnect. Please try again.')
+    await send(chatId, `❌ Something went wrong while disconnecting. Please try again.`)
     return
   }
 
-  await send(chatId, 'Account disconnected. Your data is safe in FinFlow.')
+  await send(chatId, `👋 <b>Account disconnected</b>\n\nYour data is safe in FinFlow. You can reconnect anytime via Settings.`)
 })
 
 // ─── /recent ──────────────────────────────────────────────────────────────────
@@ -146,39 +156,55 @@ bot.onText(/\/recent/, async (msg) => {
   const user = await requireUser(chatId, msg.from.id)
   if (!user) return
 
-  const transactions = await getRecentTransactions(user.user_id, 5)
-  await send(chatId, formatRecentTransactions(transactions))
+  try {
+    const transactions = await getRecentTransactions(user.user_id, 5)
+    await send(chatId, formatRecentTransactions(transactions))
+  } catch (err) {
+    console.error('Recent error:', err.message)
+    await send(chatId, `❌ Couldn't fetch your transactions right now. Please try again.`)
+  }
 })
 
 // ─── /limits — show usage ─────────────────────────────────────────────────────
 bot.onText(/\/limits/, async (msg) => {
   const chatId = msg.chat.id
   const userId = msg.from.id.toString()
-  const text = getRateLimitStatus(userId, 'text')
-  const photo = getRateLimitStatus(userId, 'photo')
+  const textStats = getRateLimitStatus(userId, 'text')
+  const photoStats = getRateLimitStatus(userId, 'photo')
+
+  const textBar = buildMiniBar(textStats.remaining, textStats.limit)
+  const photoBar = buildMiniBar(photoStats.remaining, photoStats.limit)
 
   await send(chatId,
-    `<b>Daily Usage</b>\n<pre>───────────────────\n` +
-    `Text   ${text.remaining} / ${text.limit} remaining\n` +
-    `Photo  ${photo.remaining} / ${photo.limit} remaining</pre>\n` +
-    `Resets at midnight`
+    `📊 <b>Daily Usage</b>\n\n` +
+    `✍️ Text entries   <b>${textStats.remaining}/${textStats.limit}</b>\n` +
+    `${textBar}\n\n` +
+    `📷 Receipt scans  <b>${photoStats.remaining}/${photoStats.limit}</b>\n` +
+    `${photoBar}\n\n` +
+    `<i>Resets at midnight every day</i>`
   )
 })
 
+function buildMiniBar(remaining, limit) {
+  const used = limit - remaining
+  const filled = Math.round((used / limit) * 8)
+  const empty = 8 - filled
+  return '█'.repeat(filled) + '░'.repeat(empty)
+}
 
+// ─── /add — manual entry ──────────────────────────────────────────────────────
 bot.onText(/\/add/, async (msg) => {
   const chatId = msg.chat.id
   const user = await requireUser(chatId, msg.from.id)
   if (!user) return
 
   clearSession(chatId)
-  setSession(chatId, {
-    state: STATE.MANUAL_AMOUNT,
-    pending: {}
-  })
+  setSession(chatId, { state: STATE.MANUAL_AMOUNT, pending: {} })
 
   await send(chatId,
-    'Step 1/4: Enter the <b>amount</b>\n\nExample: <code>500</code>',
+    `✍️ <b>Manual Entry — Step 1 of 4</b>\n\n` +
+    `How much did you spend or receive?\n\n` +
+    `Example: <code>500</code> or <code>1200.50</code>`,
     { reply_markup: cancelKeyboard() }
   )
 })
@@ -189,30 +215,30 @@ bot.on('photo', async (msg) => {
   const user = await requireUser(chatId, msg.from.id)
   if (!user) return
 
-  const processingMsg = await send(chatId, '🔍 <b>Scanning your receipt...</b>\n\nThis may take a few seconds.')
+  const processingMsg = await send(chatId, `📷 <b>Scanning receipt...</b>\n\n<i>Reading the details, just a moment.</i>`)
 
   try {
-    // Get highest resolution photo
     const photos = msg.photo
     const bestPhoto = photos[photos.length - 1]
 
     const fileData = await downloadTelegramFile(bestPhoto.file_id, process.env.TELEGRAM_BOT_TOKEN)
     if (!fileData) {
-      await edit(chatId, processingMsg.message_id, '❌ Could not download the image. Please try again.')
+      await edit(chatId, processingMsg.message_id, `❌ <b>Couldn't read the image</b>\n\nPlease try again with a clearer photo.`)
       return
     }
 
     const parsed = await parsePhotoWithAI(fileData.base64, fileData.mimeType, msg.from.id.toString())
 
     if (parsed?.error === 'rate_limit') {
-      await edit(chatId, processingMsg.message_id, `⛔ <b>Rate Limit Reached</b>\n\n${parsed.message}`)
+      await edit(chatId, processingMsg.message_id,
+        `⛔ <b>Daily scan limit reached</b>\n\n${parsed.message}\n\nYou can still add transactions by typing them out.`
+      )
       return
     }
 
-    // ── Bulk array result ────────────────────────────────────────────────────
+    // ── Bulk array result ─────────────────────────────────────────────────────
     if (Array.isArray(parsed) && parsed.length > 0) {
       if (!getPreview(chatId)) {
-        // Preview OFF → save all immediately
         let savedCount = 0
         let failedCount = 0
         for (const txn of parsed) {
@@ -225,38 +251,40 @@ bot.on('photo', async (msg) => {
           }
         }
         await edit(chatId, processingMsg.message_id,
-          '📷 <b>Receipt Scanned!</b>\n\n' + formatBulkSummary(parsed, savedCount, failedCount)
+          `📷 <b>Receipt scanned!</b>\n\n` + formatBulkSummary(parsed, savedCount, failedCount)
         )
         const hasExpenses = parsed.some(t => t.type === 'expense')
         if (hasExpenses) await triggerBudgetAlert(user.user_id)
       } else {
-        // Preview ON → store and show with Save All/Cancel
         setPendingBulk(chatId, parsed)
         await edit(chatId, processingMsg.message_id,
-          '📷 <b>Receipt Scanned!</b>\n\n' + formatBulkPreview(parsed),
+          `📷 <b>Receipt scanned!</b>\n\n` + formatBulkPreview(parsed),
           { reply_markup: confirmAllKeyboard() }
         )
       }
       return
     }
 
-    // ── Single result ────────────────────────────────────────────────────────
+    // ── Single result ─────────────────────────────────────────────────────────
     if (!parsed || !parsed.amount) {
       await edit(chatId, processingMsg.message_id,
-        '❌ <b>Could not parse this image.</b>\n\nMake sure:\n• The receipt is clear and readable\n• Lighting is good\n• Try sending a cleaner photo\n\nOr type the transaction manually instead.'
+        `❌ <b>Couldn't read this receipt</b>\n\n` +
+        `Make sure the image is:\n` +
+        `• Clear and well-lit\n` +
+        `• Not blurry or cropped\n\n` +
+        `Or type the transaction manually instead.`
       )
       return
     }
 
     if (!getPreview(chatId)) {
-      // Preview OFF → save immediately
       const { error } = await saveTransaction(user.user_id, parsed)
       if (error) {
-        await edit(chatId, processingMsg.message_id, '❌ Failed to save. Please try again.')
+        await edit(chatId, processingMsg.message_id, `❌ Failed to save. Please try again.`)
         return
       }
       await edit(chatId, processingMsg.message_id,
-        '📷 <b>Receipt Scanned!</b>\n\n' + formatSavedTransaction(parsed)
+        `📷 <b>Receipt scanned!</b>\n\n` + formatSavedTransaction(parsed)
       )
       if (parsed.type === 'expense') {
         const alert = await checkBudgetAlerts(user.user_id, parsed.category)
@@ -264,20 +292,19 @@ bot.on('photo', async (msg) => {
         await triggerBudgetAlert(user.user_id)
       }
     } else {
-      // Preview ON → show with Save/Edit/Cancel
       setSession(chatId, {
         state: STATE.AWAITING_CONFIRM,
         pending: parsed,
         editMessageId: processingMsg.message_id
       })
       await edit(chatId, processingMsg.message_id,
-        '📷 <b>Receipt Scanned!</b>\n\n' + formatTransactionPreview(parsed),
+        `📷 <b>Receipt scanned!</b>\n\n` + formatTransactionPreview(parsed),
         { reply_markup: confirmKeyboard() }
       )
     }
   } catch (err) {
     console.error('Photo handler error:', err)
-    await edit(chatId, processingMsg.message_id, '❌ Something went wrong. Please try again.')
+    await edit(chatId, processingMsg.message_id, `❌ Something went wrong. Please try again.`)
   }
 })
 
@@ -289,11 +316,11 @@ bot.on('message', async (msg) => {
   const textLower = text.toLowerCase()
   const session = getSession(chatId)
 
-  // ── Preview toggle commands ────────────────────────────────────────────────
+  // ── Preview toggle ─────────────────────────────────────────────────────────
   if (textLower === 'preview on') {
     setPreview(chatId, true)
     await send(chatId,
-      '✅ <b>Preview enabled</b>\n\nYou\'ll see transaction details before saving. Send <b>preview off</b> to disable.'
+      `👁 <b>Preview mode on</b>\n\nYou'll see every transaction before it's saved. Great for double-checking!\n\nSend <b>preview off</b> to disable.`
     )
     return
   }
@@ -301,34 +328,34 @@ bot.on('message', async (msg) => {
   if (textLower === 'preview off') {
     setPreview(chatId, false)
     await send(chatId,
-      '✅ <b>Preview disabled</b>\n\nTransactions will save instantly. Send <b>preview on</b> to enable preview.'
+      `⚡ <b>Preview mode off</b>\n\nTransactions now save instantly — fast and seamless.\n\nSend <b>preview on</b> to enable review.`
     )
     return
   }
 
-  // ── Help command ───────────────────────────────────────────────────────────
+  // ── Help ───────────────────────────────────────────────────────────────────
   if (textLower === 'help') {
     await send(chatId,
-      `<b>FinFlow Bot</b>\n\n` +
-      `Add transactions:\n` +
-      `· Type naturally — "spent 500 on lunch"\n` +
-      `· Send a receipt photo\n` +
-      `· Use /add for step-by-step\n\n` +
-      `Commands:\n` +
-      `• preview on   — Enable transaction preview\n` +
-      `• preview off  — Disable preview (default)\n` +
-      `• balance      — All time summary\n` +
-      `• monthly      — This month summary\n` +
-      `• recent       — Last 5 transactions\n` +
-      `• disconnect   — Unlink account\n` +
-      `• help         — Show this message\n\n` +
-      `/add    — Manual entry\n` +
-      `/limits — Daily usage`
+      `📖 <b>FinFlow Bot — How it works</b>\n\n` +
+      `<b>Add a transaction</b>\n` +
+      `· Just type it — <i>"spent 500 on lunch"</i>\n` +
+      `· Send multiple — <i>"lunch 200, auto 80, groceries 1200"</i>\n` +
+      `· Take a photo of any receipt 📷\n` +
+      `· Step-by-step with /add\n\n` +
+      `<b>View your data</b>\n` +
+      `· <b>balance</b> — overall income vs expense\n` +
+      `· <b>monthly</b> — this month's summary\n` +
+      `· <b>recent</b> — last 5 transactions\n\n` +
+      `<b>Settings</b>\n` +
+      `· <b>preview on/off</b> — review before saving\n` +
+      `· <b>disconnect</b> — unlink this account\n` +
+      `· /limits — check daily usage\n\n` +
+      `<i>Works in English, Hindi, Bengali and more 🇮🇳</i>`
     )
     return
   }
 
-  // ── Info commands — require connected user ─────────────────────────────────
+  // ── Balance commands ───────────────────────────────────────────────────────
   if (textLower === 'balance') {
     const user = await requireUser(chatId, msg.from.id)
     if (!user) return
@@ -337,7 +364,7 @@ bot.on('message', async (msg) => {
       await send(chatId, formatBalance(summary, false))
     } catch (err) {
       console.error('Balance error:', err.message)
-      await send(chatId, '❌ Could not fetch balance. Please try again.')
+      await send(chatId, `❌ Couldn't fetch your balance right now. Please try again.`)
     }
     return
   }
@@ -350,7 +377,7 @@ bot.on('message', async (msg) => {
       await send(chatId, formatBalance(summary, true))
     } catch (err) {
       console.error('Monthly error:', err.message)
-      await send(chatId, '❌ Could not fetch monthly balance. Please try again.')
+      await send(chatId, `❌ Couldn't fetch this month's data. Please try again.`)
     }
     return
   }
@@ -363,7 +390,7 @@ bot.on('message', async (msg) => {
       await send(chatId, formatRecentTransactions(transactions))
     } catch (err) {
       console.error('Recent error:', err.message)
-      await send(chatId, '❌ Could not fetch recent transactions. Please try again.')
+      await send(chatId, `❌ Couldn't fetch recent transactions. Please try again.`)
     }
     return
   }
@@ -374,14 +401,11 @@ bot.on('message', async (msg) => {
         .from('settings')
         .update({ telegram_id: null, telegram_chat_id: null })
         .eq('telegram_id', msg.from.id.toString())
-      if (error) {
-        await send(chatId, '[ERROR] Could not disconnect. Please try again.')
-        return
-      }
-      await send(chatId, 'Account disconnected. Your data is safe in FinFlow.')
+      if (error) throw error
+      await send(chatId, `👋 <b>Account disconnected</b>\n\nYour data is safe in FinFlow. Reconnect anytime via Settings.`)
     } catch (err) {
       console.error('Disconnect error:', err.message)
-      await send(chatId, '❌ Could not disconnect. Please try again.')
+      await send(chatId, `❌ Couldn't disconnect right now. Please try again.`)
     }
     return
   }
@@ -390,15 +414,15 @@ bot.on('message', async (msg) => {
   if (session.state === STATE.MANUAL_AMOUNT) {
     const amount = parseFloat(text.replace(/[₹,\s]/g, ''))
     if (isNaN(amount) || amount <= 0) {
-      await send(chatId, '❌ Invalid amount. Please enter a number like <code>500</code>', { reply_markup: cancelKeyboard() })
+      await send(chatId,
+        `❌ That doesn't look like a valid amount.\n\nPlease enter a number like <code>500</code> or <code>1200.50</code>`,
+        { reply_markup: cancelKeyboard() }
+      )
       return
     }
-    setSession(chatId, {
-      state: STATE.MANUAL_TYPE,
-      pending: { ...session.pending, amount }
-    })
+    setSession(chatId, { state: STATE.MANUAL_TYPE, pending: { ...session.pending, amount } })
     await send(chatId,
-      `Amount: <b>₹${amount.toLocaleString('en-IN')}</b>\n\nStep 2/4: Select the <b>type</b>`,
+      `✍️ <b>Step 2 of 4 — Type</b>\n\nAmount: <b>₹${amount.toLocaleString('en-IN')}</b>\n\nIs this money going out or coming in?`,
       { reply_markup: typeKeyboard() }
     )
     return
@@ -407,16 +431,8 @@ bot.on('message', async (msg) => {
   if (session.state === STATE.MANUAL_NOTE) {
     const note = text.toLowerCase() === 'skip' ? '' : text
     const pending = { ...session.pending, note }
-
-    setSession(chatId, {
-      state: STATE.AWAITING_CONFIRM,
-      pending
-    })
-
-    await send(chatId,
-      formatTransactionPreview(pending),
-      { reply_markup: confirmKeyboard() }
-    )
+    setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
+    await send(chatId, formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
     return
   }
 
@@ -424,21 +440,26 @@ bot.on('message', async (msg) => {
   if (session.state === STATE.EDITING_AMOUNT) {
     const amount = parseFloat(text.replace(/[₹,\s]/g, ''))
     if (isNaN(amount) || amount <= 0) {
-      await send(chatId, '❌ Invalid amount. Enter a number like <code>500</code>', { reply_markup: cancelKeyboard() })
+      await send(chatId, `❌ Invalid amount. Try something like <code>750</code>`, { reply_markup: cancelKeyboard() })
       return
     }
     const pending = { ...session.pending, amount }
     setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
-    await send(chatId, '✅ Amount updated!\n\n' + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
+    await send(chatId, `✅ Amount updated!\n\n` + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
     return
   }
 
   if (session.state === STATE.EDITING_DATE) {
     let date = text
     if (text.toLowerCase() === 'today') date = new Date().toISOString().split('T')[0]
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRegex.test(date)) {
+      await send(chatId, `❌ Use the format <code>YYYY-MM-DD</code> or just type <code>today</code>`, { reply_markup: cancelKeyboard() })
+      return
+    }
     const pending = { ...session.pending, date }
     setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
-    await send(chatId, '✅ Date updated!\n\n' + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
+    await send(chatId, `✅ Date updated!\n\n` + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
     return
   }
 
@@ -446,27 +467,28 @@ bot.on('message', async (msg) => {
     const note = text.toLowerCase() === 'skip' ? '' : text
     const pending = { ...session.pending, note }
     setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
-    await send(chatId, '✅ Note updated!\n\n' + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
+    await send(chatId, `✅ Note updated!\n\n` + formatTransactionPreview(pending), { reply_markup: confirmKeyboard() })
     return
   }
 
-  // ── Normal message → AI parse ──────────────────────────────────────────────
+  // ── AI parse ───────────────────────────────────────────────────────────────
   const user = await requireUser(chatId, msg.from.id)
   if (!user) return
 
-  const processingMsg = await send(chatId, '🔄 <b>Processing...</b>')
+  const processingMsg = await send(chatId, `⏳ <b>Parsing your transaction...</b>`)
 
   const parsed = await parseTextWithAI(text, msg.from.id.toString())
 
   if (parsed?.error === 'rate_limit') {
-    await edit(chatId, processingMsg.message_id, `⛔ <b>Rate Limit Reached</b>\n\n${parsed.message}`)
+    await edit(chatId, processingMsg.message_id,
+      `⛔ <b>Daily limit reached</b>\n\n${parsed.message}`
+    )
     return
   }
 
-  // ── Bulk array result ────────────────────────────────────────────────────
+  // ── Bulk array ─────────────────────────────────────────────────────────────
   if (Array.isArray(parsed) && parsed.length > 0) {
     if (!getPreview(chatId)) {
-      // Preview OFF → save all immediately
       let savedCount = 0
       let failedCount = 0
       for (const txn of parsed) {
@@ -478,35 +500,33 @@ bot.on('message', async (msg) => {
           failedCount++
         }
       }
-      await edit(chatId, processingMsg.message_id,
-        formatBulkSummary(parsed, savedCount, failedCount)
-      )
+      await edit(chatId, processingMsg.message_id, formatBulkSummary(parsed, savedCount, failedCount))
       const hasExpenses = parsed.some(t => t.type === 'expense')
       if (hasExpenses) await triggerBudgetAlert(user.user_id)
     } else {
-      // Preview ON → store and show with Save All/Cancel
       setPendingBulk(chatId, parsed)
-      await edit(chatId, processingMsg.message_id,
-        formatBulkPreview(parsed),
-        { reply_markup: confirmAllKeyboard() }
-      )
+      await edit(chatId, processingMsg.message_id, formatBulkPreview(parsed), { reply_markup: confirmAllKeyboard() })
     }
     return
   }
 
-  // ── Single result ────────────────────────────────────────────────────────
+  // ── Single result ──────────────────────────────────────────────────────────
   if (!parsed || !parsed.amount) {
     await edit(chatId, processingMsg.message_id,
-      '❌ <b>Could not understand that.</b>\n\nTry:\n• "spent 500 on lunch"\n• "received 50000 salary"\n• "paid 1200 electricity bill"\n\nOr use /add for manual entry.'
+      `🤔 <b>Couldn't understand that</b>\n\n` +
+      `Try phrasing it like:\n` +
+      `· <i>"spent 500 on lunch"</i>\n` +
+      `· <i>"received 50000 salary"</i>\n` +
+      `· <i>"paid 1200 for electricity"</i>\n\n` +
+      `Or use /add for guided manual entry.`
     )
     return
   }
 
   if (!getPreview(chatId)) {
-    // Preview OFF → save immediately
     const { error } = await saveTransaction(user.user_id, parsed)
     if (error) {
-      await edit(chatId, processingMsg.message_id, '❌ Failed to save. Please try again.')
+      await edit(chatId, processingMsg.message_id, `❌ Failed to save. Please try again.`)
       return
     }
     await edit(chatId, processingMsg.message_id, formatSavedTransaction(parsed))
@@ -516,7 +536,6 @@ bot.on('message', async (msg) => {
       await triggerBudgetAlert(user.user_id)
     }
   } else {
-    // Preview ON → show with Save/Edit/Cancel
     setSession(chatId, {
       state: STATE.AWAITING_CONFIRM,
       pending: parsed,
@@ -529,7 +548,7 @@ bot.on('message', async (msg) => {
   }
 })
 
-// ─── Handle callback queries (button presses) ─────────────────────────────────
+// ─── Handle callback queries ──────────────────────────────────────────────────
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id
   const messageId = query.message.message_id
@@ -538,15 +557,14 @@ bot.on('callback_query', async (query) => {
 
   await answer(query.id)
 
-  // ── Confirm save all (bulk) ────────────────────────────────────────────────
+  // ── Save all (bulk) ────────────────────────────────────────────────────────
   if (data === 'confirm_save_all') {
     const user = await requireUser(chatId, query.from.id)
     if (!user) return
 
     const bulk = getPendingBulk(chatId)
     if (!bulk || bulk.length === 0) {
-      await edit(chatId, messageId, 'Session expired. Please try again.')
-      clearPendingBulk(chatId)
+      await edit(chatId, messageId, `⏱ Session expired. Please send the message again.`)
       return
     }
 
@@ -570,29 +588,27 @@ bot.on('callback_query', async (query) => {
     return
   }
 
-  // ── Confirm save ───────────────────────────────────────────────────────────
+  // ── Save single ────────────────────────────────────────────────────────────
   if (data === 'confirm_save') {
     const user = await requireUser(chatId, query.from.id)
     if (!user) return
 
     const pending = session.pending
     if (!pending) {
-      await send(chatId, 'Session expired. Please try again.')
+      await send(chatId, `⏱ Session expired. Please try again.`)
       clearSession(chatId)
       return
     }
 
-    const { data: saved, error } = await saveTransaction(user.user_id, pending)
-
+    const { error } = await saveTransaction(user.user_id, pending)
     if (error) {
-      await edit(chatId, messageId, '[ERROR] Failed to save. Please try again.')
+      await edit(chatId, messageId, `❌ Couldn't save right now. Please try again.`)
       return
     }
 
     clearSession(chatId)
     await edit(chatId, messageId, formatSavedTransaction(pending))
 
-    // Check budget alerts
     if (pending.type === 'expense') {
       const alert = await checkBudgetAlerts(user.user_id, pending.category)
       if (alert) await send(chatId, formatBudgetAlert(alert))
@@ -601,41 +617,35 @@ bot.on('callback_query', async (query) => {
     return
   }
 
-  // ── Edit transaction ───────────────────────────────────────────────────────
+  // ── Edit ───────────────────────────────────────────────────────────────────
   if (data === 'edit_transaction') {
-    await edit(chatId, messageId,
-      '✏️ <b>What would you like to edit?</b>',
-      { reply_markup: editFieldKeyboard() }
-    )
+    await edit(chatId, messageId, `✏️ <b>What would you like to change?</b>`, { reply_markup: editFieldKeyboard() })
     return
   }
 
   if (data === 'edit_amount') {
     setSession(chatId, { state: STATE.EDITING_AMOUNT })
-    await edit(chatId, messageId,
-      '💰 Enter new <b>amount</b>:\n\nExample: <code>750</code>',
-      { reply_markup: cancelKeyboard() }
-    )
+    await edit(chatId, messageId, `✏️ <b>New amount</b>\n\nEnter the correct amount:\n<code>750</code>`, { reply_markup: cancelKeyboard() })
     return
   }
 
   if (data === 'edit_type') {
     setSession(chatId, { state: STATE.EDITING_TYPE })
-    await edit(chatId, messageId, '📂 Select transaction <b>type</b>:', { reply_markup: typeKeyboard() })
+    await edit(chatId, messageId, `✏️ <b>Transaction type</b>\n\nIs this money going out or coming in?`, { reply_markup: typeKeyboard() })
     return
   }
 
   if (data === 'edit_category') {
     const type = session.pending?.type || 'expense'
     setSession(chatId, { state: STATE.EDITING_CATEGORY })
-    await edit(chatId, messageId, '🏷 Select <b>category</b>:', { reply_markup: categoryKeyboard(type) })
+    await edit(chatId, messageId, `✏️ <b>Pick a category</b>`, { reply_markup: categoryKeyboard(type) })
     return
   }
 
   if (data === 'edit_date') {
     setSession(chatId, { state: STATE.EDITING_DATE })
     await edit(chatId, messageId,
-      `📅 Enter new <b>date</b>:\n\nFormat: <code>YYYY-MM-DD</code> or type <code>today</code>`,
+      `✏️ <b>New date</b>\n\nFormat: <code>YYYY-MM-DD</code>\nOr type <code>today</code>`,
       { reply_markup: cancelKeyboard() }
     )
     return
@@ -644,7 +654,7 @@ bot.on('callback_query', async (query) => {
   if (data === 'edit_note') {
     setSession(chatId, { state: STATE.EDITING_NOTE })
     await edit(chatId, messageId,
-      '📝 Enter new <b>note</b> (or type <code>skip</code>):',
+      `✏️ <b>New note</b>\n\nAdd a short description, or type <code>skip</code> to leave it blank.`,
       { reply_markup: cancelKeyboard() }
     )
     return
@@ -656,18 +666,15 @@ bot.on('callback_query', async (query) => {
     const pending = { ...session.pending, type }
 
     if (session.state === STATE.MANUAL_TYPE) {
-      setSession(chatId, {
-        state: STATE.MANUAL_CATEGORY,
-        pending
-      })
+      setSession(chatId, { state: STATE.MANUAL_CATEGORY, pending })
       await edit(chatId, messageId,
-        `Type: <b>${type}</b>\n\nStep 3/4: Select <b>category</b>`,
+        `✍️ <b>Step 3 of 4 — Category</b>\n\nType selected: <b>${type === 'expense' ? '📉 Expense' : '📈 Income'}</b>\n\nNow pick a category:`,
         { reply_markup: categoryKeyboard(type) }
       )
     } else {
       setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
       await edit(chatId, messageId,
-        '✅ Type updated!\n\n' + formatTransactionPreview(pending),
+        `✅ Type updated!\n\n` + formatTransactionPreview(pending),
         { reply_markup: confirmKeyboard() }
       )
     }
@@ -681,18 +688,15 @@ bot.on('callback_query', async (query) => {
 
     if (session.state === STATE.MANUAL_CATEGORY) {
       const today = new Date().toISOString().split('T')[0]
-      setSession(chatId, {
-        state: STATE.MANUAL_NOTE,
-        pending: { ...pending, date: today }
-      })
+      setSession(chatId, { state: STATE.MANUAL_NOTE, pending: { ...pending, date: today } })
       await edit(chatId, messageId,
-        `Category: <b>${category}</b>\n\nStep 4/4: Add a <b>note</b> (or type <code>skip</code>)`,
+        `✍️ <b>Step 4 of 4 — Note</b>\n\nCategory: <b>${category}</b>\n\nAdd a short note or type <code>skip</code>:`,
         { reply_markup: cancelKeyboard() }
       )
     } else {
       setSession(chatId, { state: STATE.AWAITING_CONFIRM, pending })
       await edit(chatId, messageId,
-        '✅ Category updated!\n\n' + formatTransactionPreview(pending),
+        `✅ Category updated!\n\n` + formatTransactionPreview(pending),
         { reply_markup: confirmKeyboard() }
       )
     }
@@ -702,22 +706,20 @@ bot.on('callback_query', async (query) => {
   // ── Back to preview ────────────────────────────────────────────────────────
   if (data === 'back_to_preview') {
     setSession(chatId, { state: STATE.AWAITING_CONFIRM })
-    await edit(chatId, messageId,
-      formatTransactionPreview(session.pending),
-      { reply_markup: confirmKeyboard() }
-    )
+    await edit(chatId, messageId, formatTransactionPreview(session.pending), { reply_markup: confirmKeyboard() })
     return
   }
 
   // ── Cancel ─────────────────────────────────────────────────────────────────
   if (data === 'cancel') {
     clearSession(chatId)
-    await edit(chatId, messageId, 'Cancelled. Send a message or use /add.')
+    clearPendingBulk(chatId)
+    await edit(chatId, messageId, `↩️ Cancelled. Send a transaction or use /add whenever you're ready.`)
     return
   }
 })
 
-// ─── Error handler ────────────────────────────────────────────────────────────
+// ─── Polling error handler ─────────────────────────────────────────────────────
 bot.on('polling_error', (err) => {
   console.error('Polling error:', err.message)
 })

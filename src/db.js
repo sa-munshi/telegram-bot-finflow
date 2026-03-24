@@ -38,12 +38,14 @@ async function saveTransaction(userId, parsed) {
   return { data, error }
 }
 
-// ─── Get balance summary ─────────────────────────────────────────────────────
+// ─── Get balance summary (all time) ─────────────────────────────────────────
 async function getBalanceSummary(userId) {
-  const { data: transactions } = await supabase
+  const { data: transactions, error } = await supabase
     .from('transactions')
     .select('amount, type')
     .eq('user_id', userId)
+
+  if (error) throw error
 
   const income = (transactions || [])
     .filter(t => t.type === 'income')
@@ -56,17 +58,27 @@ async function getBalanceSummary(userId) {
   return { income, expense, balance: income - expense }
 }
 
-// ─── Get this month's balance ────────────────────────────────────────────────
+// ─── Get this month's balance ─────────────────────────────────────────────────
+// FIX: Use gte/lte date range instead of .like() which may fail on some Supabase configs
 async function getMonthlyBalance(userId) {
   const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
   const year = now.getFullYear()
+  const month = now.getMonth() + 1
 
-  const { data: transactions } = await supabase
+  // First day of current month
+  const startDate = `${year}-${String(month).padStart(2, '0')}-01`
+  // Last day of current month
+  const lastDay = new Date(year, month, 0).getDate()
+  const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+
+  const { data: transactions, error } = await supabase
     .from('transactions')
     .select('amount, type, category')
     .eq('user_id', userId)
-    .like('date', `${year}-${month}%`)
+    .gte('date', startDate)
+    .lte('date', endDate)
+
+  if (error) throw error
 
   const income = (transactions || [])
     .filter(t => t.type === 'income')
@@ -81,26 +93,34 @@ async function getMonthlyBalance(userId) {
 
 // ─── Get recent transactions ─────────────────────────────────────────────────
 async function getRecentTransactions(userId, limit = 5) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('transactions')
     .select('*')
     .eq('user_id', userId)
+    .order('date', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(limit)
 
+  if (error) throw error
   return data || []
 }
 
 // ─── Get budgets with spending ───────────────────────────────────────────────
 async function getBudgetsWithSpending(userId) {
   const now = new Date()
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`
+
+  const startDate = `${monthStr}-01`
+  const lastDay = new Date(year, month, 0).getDate()
+  const endDate = `${monthStr}-${String(lastDay).padStart(2, '0')}`
 
   const { data: budgets } = await supabase
     .from('budgets')
     .select('*')
     .eq('user_id', userId)
-    .eq('month', month)
+    .eq('month', monthStr)
 
   if (!budgets || budgets.length === 0) return []
 
@@ -109,7 +129,8 @@ async function getBudgetsWithSpending(userId) {
     .select('amount, category')
     .eq('user_id', userId)
     .eq('type', 'expense')
-    .like('date', `${month}%`)
+    .gte('date', startDate)
+    .lte('date', endDate)
 
   return budgets.map(budget => {
     const spent = (transactions || [])
@@ -128,13 +149,19 @@ async function getBudgetsWithSpending(userId) {
 // ─── Check budget alerts after new transaction ───────────────────────────────
 async function checkBudgetAlerts(userId, category) {
   const now = new Date()
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`
+
+  const startDate = `${monthStr}-01`
+  const lastDay = new Date(year, month, 0).getDate()
+  const endDate = `${monthStr}-${String(lastDay).padStart(2, '0')}`
 
   const { data: budget } = await supabase
     .from('budgets')
     .select('*')
     .eq('user_id', userId)
-    .eq('month', month)
+    .eq('month', monthStr)
     .eq('category', category)
     .single()
 
@@ -146,7 +173,8 @@ async function checkBudgetAlerts(userId, category) {
     .eq('user_id', userId)
     .eq('type', 'expense')
     .eq('category', category)
-    .like('date', `${month}%`)
+    .gte('date', startDate)
+    .lte('date', endDate)
 
   const spent = (transactions || []).reduce((s, t) => s + Number(t.amount), 0)
   const percentage = Math.round((spent / Number(budget.amount)) * 100)
@@ -159,7 +187,7 @@ async function checkBudgetAlerts(userId, category) {
   return null
 }
 
-// ─── Trigger budget alert via Next.js app (email + in-app + push) ────────────
+// ─── Trigger budget alert via Next.js app ────────────────────────────────────
 async function triggerBudgetAlert(userId) {
   try {
     const appUrl = process.env.APP_URL
@@ -167,17 +195,14 @@ async function triggerBudgetAlert(userId) {
       console.warn('[BudgetAlert] Skipped: APP_URL or WEBHOOK_SECRET not set')
       return
     }
-    const res = await fetch(
-      `${appUrl}/api/notifications/budget-alert`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-bot-secret': process.env.WEBHOOK_SECRET
-        },
-        body: JSON.stringify({ user_id: userId })
-      }
-    )
+    const res = await fetch(`${appUrl}/api/notifications/budget-alert`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-secret': process.env.WEBHOOK_SECRET
+      },
+      body: JSON.stringify({ user_id: userId })
+    })
     if (!res.ok) {
       console.error(`[BudgetAlert] HTTP ${res.status}: ${res.statusText}`)
       return
@@ -189,7 +214,7 @@ async function triggerBudgetAlert(userId) {
   }
 }
 
-// ─── Get all users with telegram connected (for app notifications) ───────────
+// ─── Get all users with telegram connected ───────────────────────────────────
 async function getAllTelegramUsers() {
   const { data } = await supabase
     .from('settings')
