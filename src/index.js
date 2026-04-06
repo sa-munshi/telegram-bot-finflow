@@ -143,6 +143,56 @@ app.post('/notify/budget-check', async (req, res) => {
   }
 })
 
+// ─── Connect notification endpoint ───────────────────────────────────────────
+// Called when a user links their Telegram account from the FinFlow app
+// POST /notify/connect
+// Body: { chat_id }
+app.post('/notify/connect', async (req, res) => {
+  try {
+    const secret = req.headers['x-webhook-secret']
+    if (secret !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    const { chat_id } = req.body
+    if (!chat_id) return res.status(400).json({ error: 'Missing chat_id' })
+
+    await bot.sendMessage(chat_id,
+      `✅ Your Telegram has been linked to FinFlow! Type help to see available commands.`
+    )
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Connect notification error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── Disconnect notification endpoint ────────────────────────────────────────
+// Called before clearing chat_id when a user disconnects from the FinFlow app
+// POST /notify/disconnect
+// Body: { chat_id }
+app.post('/notify/disconnect', async (req, res) => {
+  try {
+    const secret = req.headers['x-webhook-secret']
+    if (secret !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    const { chat_id } = req.body
+    if (!chat_id) return res.status(400).json({ error: 'Missing chat_id' })
+
+    await bot.sendMessage(chat_id,
+      `🔗 Your Telegram has been unlinked from FinFlow. Your data is safe. Reconnect anytime from Settings.`
+    )
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Disconnect notification error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 FinFlow Bot server running on port ${PORT}`)
