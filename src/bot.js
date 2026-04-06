@@ -1,5 +1,6 @@
 require('dotenv').config()
 const TelegramBot = require('node-telegram-bot-api')
+const fetch = require('node-fetch')
 
 const { parseTextWithAI, parsePhotoWithAI, downloadTelegramFile, getRateLimitStatus } = require('./ai')
 const {
@@ -125,7 +126,8 @@ bot.onText(/\/help/, async (msg) => {
     `<b>View your data</b>\n` +
     `· <b>balance</b> — overall income vs expense\n` +
     `· <b>monthly</b> — this month's summary\n` +
-    `· <b>recent</b> — last 5 transactions\n\n` +
+    `· <b>recent</b> — last 5 transactions\n` +
+    `· <b>report</b> — download last month's PDF report\n\n` +
     `<b>Settings</b>\n` +
     `· <b>preview on/off</b> — review before saving\n` +
     `· <b>disconnect</b> — unlink this account\n` +
@@ -345,7 +347,8 @@ bot.on('message', async (msg) => {
       `<b>View your data</b>\n` +
       `· <b>balance</b> — overall income vs expense\n` +
       `· <b>monthly</b> — this month's summary\n` +
-      `· <b>recent</b> — last 5 transactions\n\n` +
+      `· <b>recent</b> — last 5 transactions\n` +
+      `· <b>report</b> — download last month's PDF report\n\n` +
       `<b>Settings</b>\n` +
       `· <b>preview on/off</b> — review before saving\n` +
       `· <b>disconnect</b> — unlink this account\n` +
@@ -406,6 +409,63 @@ bot.on('message', async (msg) => {
     } catch (err) {
       console.error('Disconnect error:', err.message)
       await send(chatId, `❌ Couldn't disconnect right now. Please try again.`)
+    }
+    return
+  }
+
+  // ── Report command ─────────────────────────────────────────────────────────
+  if (textLower === 'report') {
+    try {
+      // Look up user by telegram_chat_id
+      const { data: settings } = await supabase
+        .from('settings')
+        .select('user_id')
+        .eq('telegram_chat_id', chatId.toString())
+        .single()
+
+      if (!settings) {
+        await send(chatId, `❌ Account not linked. Connect Telegram from FinFlow app.`)
+        return
+      }
+
+      const userId = settings.user_id
+
+      // Generate previous month filename: YYYY-MM.pdf
+      const now = new Date()
+      const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      const yyyy = prevMonth.getFullYear()
+      const mm = String(prevMonth.getMonth() + 1).padStart(2, '0')
+      const filename = `${yyyy}-${mm}.pdf`
+      const filePath = `${userId}/${filename}`
+
+      // Generate signed URL from Supabase storage bucket "reports"
+      const { data: signedUrlData, error: signedUrlError } = await supabase
+        .storage
+        .from('reports')
+        .createSignedUrl(filePath, 3600)
+
+      if (signedUrlError || !signedUrlData?.signedUrl) {
+        await send(chatId, `📊 No report yet. Reports generate on 1st of each month!`)
+        return
+      }
+
+      // Download the PDF and send via Telegram sendDocument API
+      const pdfResponse = await fetch(signedUrlData.signedUrl)
+      if (!pdfResponse.ok) {
+        await send(chatId, `📊 No report yet. Reports generate on 1st of each month!`)
+        return
+      }
+      const pdfBuffer = await pdfResponse.buffer()
+
+      await bot.sendDocument(chatId, pdfBuffer, {
+        caption: `📊 Your FinFlow report for ${yyyy}-${mm}`
+      }, {
+        filename: filename,
+        contentType: 'application/pdf'
+      })
+    } catch (err) {
+      console.error('Report error:', err.message)
+      await send(chatId, `❌ Couldn't fetch your report right now. Please try again.`)
     }
     return
   }
