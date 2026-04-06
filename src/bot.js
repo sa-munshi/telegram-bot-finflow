@@ -452,7 +452,11 @@ bot.on('message', async (msg) => {
       // Download the PDF and send via Telegram sendDocument API
       const pdfResponse = await fetch(signedUrlData.signedUrl)
       if (!pdfResponse.ok) {
-        await send(chatId, `📊 No report yet. Reports generate on 1st of each month!`)
+        if (pdfResponse.status === 404 || pdfResponse.status === 400) {
+          await send(chatId, `📊 No report yet. Reports generate on 1st of each month!`)
+        } else {
+          await send(chatId, `❌ Couldn't download your report right now. Please try again.`)
+        }
         return
       }
       const pdfBuffer = await pdfResponse.buffer()
