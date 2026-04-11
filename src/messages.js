@@ -82,9 +82,28 @@ function formatBudgetAlert(alert) {
   )
 }
 
-// ─── Format balance summary ───────────────────────────────────────────────────
-function formatBalance(summary, monthly = false) {
-  const label = monthly ? 'This Month' : 'All Time'
+// ─── Format monthly balance summary ───────────────────────────────────────────
+function formatMonthlyBalance(summary) {
+  const now = new Date()
+  const monthLabel = `${MONTHS[now.getMonth()]} ${now.getFullYear()}`
+  const savingsRate = summary.income > 0
+    ? Math.round(((summary.income - summary.expense) / summary.income) * 100)
+    : 0
+  const savingsEmoji = savingsRate >= 50 ? '🟢' : savingsRate >= 20 ? '🟡' : '🔴'
+
+  return (
+    `📊 <b>Balance — ${monthLabel}</b>\n\n` +
+    `📈 Income      <b>${formatINR(summary.income)}</b>\n` +
+    `📉 Expense     <b>${formatINR(summary.expense)}</b>\n` +
+    `———————\n` +
+    `🏠 Net         <b>${formatINR(summary.balance)}</b>\n` +
+    `${savingsEmoji} Savings rate <b>${savingsRate}%</b>\n\n` +
+    `— <i>This month</i>`
+  )
+}
+
+// ─── Format all time balance summary ──────────────────────────────────────────
+function formatAllTimeBalance(summary) {
   const savingsRate = summary.income > 0
     ? Math.round(((summary.income - summary.expense) / summary.income) * 100)
     : 0
@@ -92,7 +111,7 @@ function formatBalance(summary, monthly = false) {
   const savingsEmoji = savingsRate >= 50 ? '🟢' : savingsRate >= 20 ? '🟡' : '🔴'
 
   return (
-    `📊 <b>Balance — ${label}</b>\n\n` +
+    `📊 <b>Balance — All Time</b>\n\n` +
     `📈 Income   <b>${formatINR(summary.income)}</b>\n` +
     `📉 Expense  <b>${formatINR(summary.expense)}</b>\n` +
     `───────────────\n` +
@@ -200,7 +219,8 @@ module.exports = {
   formatSavedTransaction,
   formatAppNotification,
   formatBudgetAlert,
-  formatBalance,
+  formatMonthlyBalance,
+  formatAllTimeBalance,
   formatRecentTransactions,
   formatBudgets,
   formatBulkPreview,

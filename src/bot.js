@@ -18,7 +18,8 @@ const {
   formatSavedTransaction,
   formatAppNotification,
   formatBudgetAlert,
-  formatBalance,
+  formatMonthlyBalance,
+  formatAllTimeBalance,
   formatRecentTransactions,
   formatBudgets,
   formatBulkPreview,
@@ -124,8 +125,8 @@ bot.onText(/\/help/, async (msg) => {
     `· Take a photo of any receipt 📷\n` +
     `· Step-by-step with /add\n\n` +
     `<b>View your data</b>\n` +
-    `· <b>balance</b> — overall income vs expense\n` +
-    `· <b>monthly</b> — this month's summary\n` +
+    `· <b>balance</b> — this month's summary\n` +
+    `· <b>balance all</b> / <b>alltime</b> — all time summary\n` +
     `· <b>recent</b> — last 5 transactions\n` +
     `· <b>report</b> — download last month's PDF report\n\n` +
     `<b>Settings</b>\n` +
@@ -345,8 +346,8 @@ bot.on('message', async (msg) => {
       `· Take a photo of any receipt 📷\n` +
       `· Step-by-step with /add\n\n` +
       `<b>View your data</b>\n` +
-      `· <b>balance</b> — overall income vs expense\n` +
-      `· <b>monthly</b> — this month's summary\n` +
+      `· <b>balance</b> — this month's summary\n` +
+      `· <b>balance all</b> / <b>alltime</b> — all time summary\n` +
       `· <b>recent</b> — last 5 transactions\n` +
       `· <b>report</b> — download last month's PDF report\n\n` +
       `<b>Settings</b>\n` +
@@ -363,10 +364,23 @@ bot.on('message', async (msg) => {
     const user = await requireUser(chatId, msg.from.id)
     if (!user) return
     try {
-      const summary = await getBalanceSummary(user.user_id)
-      await send(chatId, formatBalance(summary, false))
+      const summary = await getMonthlyBalance(user.user_id)
+      await send(chatId, formatMonthlyBalance(summary))
     } catch (err) {
       console.error('Balance error:', err.message)
+      await send(chatId, `❌ Couldn't fetch your balance right now. Please try again.`)
+    }
+    return
+  }
+
+  if (textLower === 'balance all' || textLower === 'alltime') {
+    const user = await requireUser(chatId, msg.from.id)
+    if (!user) return
+    try {
+      const summary = await getBalanceSummary(user.user_id)
+      await send(chatId, formatAllTimeBalance(summary))
+    } catch (err) {
+      console.error('All-time balance error:', err.message)
       await send(chatId, `❌ Couldn't fetch your balance right now. Please try again.`)
     }
     return
@@ -377,7 +391,7 @@ bot.on('message', async (msg) => {
     if (!user) return
     try {
       const summary = await getMonthlyBalance(user.user_id)
-      await send(chatId, formatBalance(summary, true))
+      await send(chatId, formatMonthlyBalance(summary))
     } catch (err) {
       console.error('Monthly error:', err.message)
       await send(chatId, `❌ Couldn't fetch this month's data. Please try again.`)
